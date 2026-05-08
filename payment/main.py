@@ -1,9 +1,15 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+import asyncio
+import os
+
+import httpx  # Modernija zamena za requests
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from redis_om import HashModel, NotFoundError
-import httpx  # Modernija zamena za requests
-import asyncio
-from database import redis # Koristi .env iz database.py 
+
+from business import compute_order_financials
+from database import redis  # Koristi .env iz database.py
+
+INVENTORY_BASE_URL = os.getenv("INVENTORY_BASE_URL", "http://localhost:8000")
 
 app = FastAPI(title="Order Service")
 
@@ -36,18 +42,19 @@ async def get_order(pk: str):
 async def create_order(body: dict, background_tasks: BackgroundTasks):
     # Asinhroni poziv ka Inventory servisu
     async with httpx.AsyncClient() as client:
-        response = await client.get(f'http://localhost:8000/products/{body["id"]}')
+        response = await client.get(f"{INVENTORY_BASE_URL}/products/{body['id']}")
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail="Product not found in Inventory")
         product = response.json()
 
+    amounts = compute_order_financials(float(product["price"]), int(body["quantity"]))
     order = Order(
-        product_id=body['id'],
-        price=product['price'],
-        fee=0.2 * product['price'],
-        total=1.2 * product['price'] * body['quantity'],
-        quantity=body['quantity'],
-        status='pending'
+        product_id=body["id"],
+        price=amounts["price"],
+        fee=amounts["fee"],
+        total=amounts["total"],
+        quantity=body["quantity"],
+        status="pending",
     )
     order.save()
 
