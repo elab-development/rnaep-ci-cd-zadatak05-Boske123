@@ -1,0 +1,69 @@
+# CI/CD payment servisa: testovi na svakom push-u; Docker Hub samo kad testovi prođu na develop/main.
+name: CI/CD Payment
+
+on:
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: payment
+    services:
+      redis:
+        # redis-om sa index=True zahteva RediSearch (Redis Stack)
+        image: redis/redis-stack-server:7.4.0-v8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalacija zavisnosti
+        run: pip install -r requirements-dev.txt
+      - name: Pytest
+        run: pytest tests -v
+
+  # Tačka 3 (CD): build i push slike samo ako je job `test` uspeo; samo develop i main.
+  docker-push:
+    name: Docker build i push (Docker Hub)
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Oznake slike (tagovi)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/payment
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build i push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./payment
+          file: ./payment/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
